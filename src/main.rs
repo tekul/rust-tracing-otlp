@@ -1,4 +1,5 @@
 use actix_web::{web, App, HttpResponse, HttpServer};
+use async_trait::async_trait;
 use opentelemetry_otlp::WithExportConfig;
 use std::{io, str::FromStr};
 use tracing::{debug, info};
@@ -55,6 +56,7 @@ fn create_otlp_tracer() -> opentelemetry::sdk::trace::Tracer {
         "http/proto" => {
             let exporter = opentelemetry_otlp::new_exporter()
                 .http()
+                .with_http_client(TracingClient::new())
                 .with_headers(headers.into_iter().collect())
                 .with_env();
             tracer = tracer.with_exporter(exporter)
@@ -63,6 +65,38 @@ fn create_otlp_tracer() -> opentelemetry::sdk::trace::Tracer {
     };
 
     tracer.install_batch(opentelemetry::runtime::Tokio).unwrap()
+}
+
+#[derive(Debug)]
+pub struct TracingClient {
+    client: reqwest::Client,
+}
+
+impl TracingClient {
+    fn new() -> Self {
+        Self {
+            client: reqwest::Client::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl opentelemetry_http::HttpClient for TracingClient {
+    async fn send(
+        &self,
+        request: opentelemetry_http::Request<Vec<u8>>,
+    ) -> Result<opentelemetry_http::Response<bytes::Bytes>, opentelemetry_http::HttpError> {
+        debug!(
+            "Request {} {} {:?} {:?}",
+            request.method(),
+            request.uri(),
+            request.version(),
+            request.headers()
+        );
+        let response = self.client.send(request).await?;
+        debug!("{:?}", response);
+        Ok(response)
+    }
 }
 
 fn metadata_from_headers(headers: Vec<(String, String)>) -> tonic::metadata::MetadataMap {
