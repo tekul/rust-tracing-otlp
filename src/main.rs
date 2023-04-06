@@ -52,7 +52,7 @@ fn create_otlp_tracer() -> opentelemetry::sdk::trace::Tracer {
             }
             tracer = tracer.with_exporter(exporter)
         }
-        "http/proto" => {
+        "http/protobuf" => {
             let exporter = opentelemetry_otlp::new_exporter()
                 .http()
                 .with_headers(headers.into_iter().collect())
