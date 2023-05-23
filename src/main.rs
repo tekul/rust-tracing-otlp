@@ -9,7 +9,8 @@ use tracing_subscriber::prelude::*;
 async fn main() -> io::Result<()> {
     let fmt_layer = tracing_subscriber::fmt::layer();
 
-    let telemetry_layer = tracing_opentelemetry::layer().with_tracer(create_otlp_tracer());
+    let telemetry_layer =
+        create_otlp_tracer().map(|t| tracing_opentelemetry::layer().with_tracer(t));
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::from_default_env())
@@ -31,7 +32,10 @@ async fn main() -> io::Result<()> {
     server.workers(2).run().await
 }
 
-fn create_otlp_tracer() -> opentelemetry::sdk::trace::Tracer {
+fn create_otlp_tracer() -> Option<opentelemetry::sdk::trace::Tracer> {
+    if !std::env::vars().any(|(name, _)| name.starts_with("OTEL_")) {
+        return None;
+    }
     let protocol = std::env::var("OTEL_EXPORTER_OTLP_PROTOCOL").unwrap_or("grpc".to_string());
 
     let mut tracer = opentelemetry_otlp::new_pipeline().tracing();
@@ -62,7 +66,7 @@ fn create_otlp_tracer() -> opentelemetry::sdk::trace::Tracer {
         p => panic!("Unsupported protocol {}", p),
     };
 
-    tracer.install_batch(opentelemetry::runtime::Tokio).unwrap()
+    Some(tracer.install_batch(opentelemetry::runtime::Tokio).unwrap())
 }
 
 fn metadata_from_headers(headers: Vec<(String, String)>) -> tonic::metadata::MetadataMap {
