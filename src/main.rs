@@ -1,5 +1,4 @@
 use actix_web::{web, App, HttpResponse, HttpServer};
-use opentelemetry_otlp::WithExportConfig;
 use std::{io, str::FromStr};
 use tracing::{debug, info};
 use tracing_actix_web::TracingLogger;
@@ -32,21 +31,20 @@ async fn main() -> io::Result<()> {
     server.workers(2).run().await
 }
 
-fn create_otlp_tracer() -> Option<opentelemetry::sdk::trace::Tracer> {
+fn create_otlp_tracer() -> Option<opentelemetry_sdk::trace::Tracer> {
     if !std::env::vars().any(|(name, _)| name.starts_with("OTEL_")) {
         return None;
     }
     let protocol = std::env::var("OTEL_EXPORTER_OTLP_PROTOCOL").unwrap_or("grpc".to_string());
 
-    let mut tracer = opentelemetry_otlp::new_pipeline().tracing();
+    let tracer = opentelemetry_otlp::new_pipeline().tracing();
     let headers = parse_otlp_headers_from_env();
 
-    match protocol.as_str() {
+    let tracer = match protocol.as_str() {
         "grpc" => {
             let mut exporter = opentelemetry_otlp::new_exporter()
                 .tonic()
-                .with_metadata(metadata_from_headers(headers))
-                .with_env();
+                .with_metadata(metadata_from_headers(headers));
 
             // Check if we need TLS
             if let Ok(endpoint) = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
@@ -54,19 +52,22 @@ fn create_otlp_tracer() -> Option<opentelemetry::sdk::trace::Tracer> {
                     exporter = exporter.with_tls_config(Default::default());
                 }
             }
-            tracer = tracer.with_exporter(exporter)
+            tracer.with_exporter(exporter)
         }
         "http/protobuf" => {
             let exporter = opentelemetry_otlp::new_exporter()
                 .http()
-                .with_headers(headers.into_iter().collect())
-                .with_env();
-            tracer = tracer.with_exporter(exporter)
+                .with_headers(headers.into_iter().collect());
+            tracer.with_exporter(exporter)
         }
         p => panic!("Unsupported protocol {}", p),
     };
 
-    Some(tracer.install_batch(opentelemetry::runtime::Tokio).unwrap())
+    Some(
+        tracer
+            .install_batch(opentelemetry_sdk::runtime::Tokio)
+            .unwrap(),
+    )
 }
 
 fn metadata_from_headers(headers: Vec<(String, String)>) -> tonic::metadata::MetadataMap {
@@ -82,6 +83,7 @@ fn metadata_from_headers(headers: Vec<(String, String)>) -> tonic::metadata::Met
     metadata
 }
 
+// Support for this has now been merged into opentelemetry-otlp so check next release after 0.14
 fn parse_otlp_headers_from_env() -> Vec<(String, String)> {
     let mut headers = Vec::new();
 
