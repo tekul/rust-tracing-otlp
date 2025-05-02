@@ -1,15 +1,22 @@
 use actix_web::{web, App, HttpResponse, HttpServer};
-use std::{io, str::FromStr};
+use opentelemetry::trace::TracerProvider as _;
+use opentelemetry_otlp::WithTonicConfig;
 use tracing::{debug, info};
 use tracing_actix_web::TracingLogger;
 use tracing_subscriber::prelude::*;
 
 #[tokio::main]
-async fn main() -> io::Result<()> {
+async fn main() -> std::io::Result<()> {
     let fmt_layer = tracing_subscriber::fmt::layer();
 
-    let telemetry_layer =
-        create_otlp_tracer().map(|t| tracing_opentelemetry::layer().with_tracer(t));
+    let telemetry_layer = match create_otlp_tracer_provider() {
+        Some(tracer_provider) => {
+            // The name provided here ends up as the attribute 'library.name' in traces
+            let tracer = tracer_provider.tracer("rust-otel-otlp");
+            Some(tracing_opentelemetry::OpenTelemetryLayer::new(tracer))
+        }
+        None => None,
+    };
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::from_default_env())
@@ -31,72 +38,34 @@ async fn main() -> io::Result<()> {
     server.workers(2).run().await
 }
 
-fn create_otlp_tracer() -> Option<opentelemetry_sdk::trace::Tracer> {
+fn create_otlp_tracer_provider() -> Option<opentelemetry_sdk::trace::SdkTracerProvider> {
     if !std::env::vars().any(|(name, _)| name.starts_with("OTEL_")) {
         return None;
     }
     let protocol = std::env::var("OTEL_EXPORTER_OTLP_PROTOCOL").unwrap_or("grpc".to_string());
 
-    let tracer = opentelemetry_otlp::new_pipeline().tracing();
-    let headers = parse_otlp_headers_from_env();
-
-    let tracer = match protocol.as_str() {
+    let exporter = match protocol.as_str() {
         "grpc" => {
-            let mut exporter = opentelemetry_otlp::new_exporter()
-                .tonic()
-                .with_metadata(metadata_from_headers(headers));
+            let mut exporter = opentelemetry_otlp::SpanExporter::builder().with_tonic();
 
             // Check if we need TLS
             if let Ok(endpoint) = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
                 if endpoint.starts_with("https") {
-                    exporter = exporter.with_tls_config(Default::default());
+                    exporter = exporter.with_tls_config(tonic::transport::ClientTlsConfig::default().with_enabled_roots());
                 }
             }
-            tracer.with_exporter(exporter)
+            exporter.build().expect("Failed to create tonic exporter")
         }
-        "http/protobuf" => {
-            let exporter = opentelemetry_otlp::new_exporter()
-                .http()
-                .with_headers(headers.into_iter().collect());
-            tracer.with_exporter(exporter)
-        }
+        "http/protobuf" => opentelemetry_otlp::SpanExporter::builder()
+            .with_http()
+            .build()
+            .expect("Failed to create http/protobuf exporter"),
         p => panic!("Unsupported protocol {}", p),
     };
 
-    Some(
-        tracer
-            .install_batch(opentelemetry_sdk::runtime::Tokio)
-            .unwrap(),
-    )
-}
-
-fn metadata_from_headers(headers: Vec<(String, String)>) -> tonic::metadata::MetadataMap {
-    use tonic::metadata;
-
-    let mut metadata = metadata::MetadataMap::new();
-    headers.into_iter().for_each(|(name, value)| {
-        let value = value
-            .parse::<metadata::MetadataValue<metadata::Ascii>>()
-            .expect("Header value invalid");
-        metadata.insert(metadata::MetadataKey::from_str(&name).unwrap(), value);
-    });
-    metadata
-}
-
-// Support for this has now been merged into opentelemetry-otlp so check next release after 0.14
-fn parse_otlp_headers_from_env() -> Vec<(String, String)> {
-    let mut headers = Vec::new();
-
-    if let Ok(hdrs) = std::env::var("OTEL_EXPORTER_OTLP_HEADERS") {
-        hdrs.split(',')
-            .map(|header| {
-                header
-                    .split_once('=')
-                    .expect("Header should contain '=' character")
-            })
-            .for_each(|(name, value)| headers.push((name.to_owned(), value.to_owned())));
-    }
-    headers
+    Some(opentelemetry_sdk::trace::SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
+        .build())
 }
 
 #[tracing::instrument()]
