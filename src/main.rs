@@ -51,7 +51,10 @@ fn create_otlp_tracer_provider() -> Option<opentelemetry_sdk::trace::SdkTracerPr
             // Check if we need TLS
             if let Ok(endpoint) = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
                 if endpoint.starts_with("https") {
-                    exporter = exporter.with_tls_config(tonic::transport::ClientTlsConfig::default().with_enabled_roots());
+                    exporter = exporter.with_tls_config(
+                        opentelemetry_otlp::tonic_types::transport::ClientTlsConfig::default()
+                            .with_enabled_roots(),
+                    );
                 }
             }
             exporter.build().expect("Failed to create tonic exporter")
@@ -63,9 +66,11 @@ fn create_otlp_tracer_provider() -> Option<opentelemetry_sdk::trace::SdkTracerPr
         p => panic!("Unsupported protocol {}", p),
     };
 
-    Some(opentelemetry_sdk::trace::SdkTracerProvider::builder()
-        .with_batch_exporter(exporter)
-        .build())
+    Some(
+        opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_batch_exporter(exporter)
+            .build(),
+    )
 }
 
 #[tracing::instrument()]
