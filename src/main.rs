@@ -63,7 +63,7 @@ fn create_otlp_tracer_provider() -> Option<opentelemetry_sdk::trace::SdkTracerPr
             .with_http()
             .build()
             .expect("Failed to create http/protobuf exporter"),
-        p => panic!("Unsupported protocol {}", p),
+        p => panic!("Unsupported proto {p}"),
     };
 
     Some(
